@@ -1,91 +1,273 @@
-# autoresearch
+# autoresearch-local
 
-![teaser](progress.png)
+`autoresearch-local` is an Apple Silicon-focused GGUF tuning and serving tool built from the structure of Karpathy's `autoresearch`.
 
-*One day, frontier AI research used to be done by meat computers in between eating, sleeping, having other fun, and synchronizing once in a while using sound wave interconnect in the ritual of "group meeting". That era is long gone. Research is now entirely the domain of autonomous swarms of AI agents running across compute cluster megastructures in the skies. The agents claim that we are now in the 10,205th generation of the code base, in any case no one could tell if that's right or wrong as the "code" is now a self-modifying binary that has grown beyond human comprehension. This repo is the story of how it all began. -@karpathy, March 2026*.
+This fork does **not** claim to be a new inference engine. It is an orchestration layer around existing local runtimes:
 
-The idea: give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and (hopefully) a better model. The training code here is a simplified single-GPU implementation of [nanochat](https://github.com/karpathy/nanochat). The core idea is that you're not touching any of the Python files like you normally would as a researcher. Instead, you are programming the `program.md` Markdown files that provide context to the AI agents and set up your autonomous research org. The default `program.md` in this repo is intentionally kept as a bare bones baseline, though it's obvious how one would iterate on it over time to find the "research org code" that achieves the fastest research progress, how you'd add more agents to the mix, etc. A bit more context on this project is here in this [tweet](https://x.com/karpathy/status/2029701092347630069).
+- `llama.cpp` for direct GGUF loading and serving
+- `ollama` for product-level comparison against the same model
 
-## How it works
+The goal is simple: given a `.gguf` file on a Mac, benchmark a fixed set of prompts, tune the runtime knobs that materially affect local performance, save the best profile, and launch a local server with that profile.
 
-The repo is deliberately kept small and only really has a three files that matter:
+## Versioning
 
-- **`prepare.py`** — fixed constants, one-time data prep (downloads training data, trains a BPE tokenizer), and runtime utilities (dataloader, evaluation). Not modified.
-- **`train.py`** — the single file the agent edits. Contains the full GPT model, optimizer (Muon + AdamW), and training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
-- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
+This project is currently tested against `llama.cpp` build `b8260-96cfc4992`.
 
-By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
+That matters because `autoresearch-local` depends on:
 
-If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
+- the `llama-cli` flag surface
+- the `llama-server` flag surface
+- the benchmark timing output format
 
-## Quick start
+Different `llama.cpp` builds may still work, but they can change CLI behavior in ways that affect tuning and parsing. The tool reports detected backend versions in `inspect` and warns at runtime when the installed `llama.cpp` build differs from the tested build.
 
-**Requirements:** A single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
+## What It Optimizes
+
+Raw decode `tokens/sec` is not the only objective because it is easy to game and often ignores user-visible latency. This project uses a fixed benchmark harness and optimizes for:
+
+- weighted end-to-end latency across short, medium, and long prompts
+- prompt processing throughput
+- decode throughput
+- crash-free completion across all scenarios
+
+The score is intentionally conservative: lower weighted latency wins. Throughput is reported, but it is not the only metric.
+
+## Scope and Accuracy
+
+This project is intended for:
+
+- macOS on Apple Silicon
+- local `.gguf` models
+- `llama.cpp` tuning and serving
+- `ollama` comparison runs against the same model
+
+This project is **not**:
+
+- a training harness
+- a replacement for `llama.cpp`
+- a claim that it outperforms `llama.cpp` kernels
+
+If a tuned profile beats a default `llama.cpp` invocation or an Ollama wrapper on a given machine, that means the tuning strategy was better for that setup. It does **not** mean this repo invented a faster inference backend.
+
+## Requirements
+
+- macOS on Apple Silicon
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/)
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) installed and available on `PATH`
+- optional: [Ollama](https://ollama.com/) for comparison runs
+
+Install `llama.cpp` with Homebrew:
 
 ```bash
+brew install llama.cpp
+```
 
-# 1. Install uv project manager (if you don't already have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+## Installation
 
-# 2. Install dependencies
+```bash
+git clone https://github.com/sidmohan0/autoresearch.git
+cd autoresearch
 uv sync
-
-# 3. Download data and train tokenizer (one-time, ~2 min)
-uv run prepare.py
-
-# 4. Manually run a single training experiment (~5 min)
-uv run train.py
 ```
 
-If the above commands all work ok, your setup is working and you can go into autonomous research mode.
+## Quick Start
 
-## Running the agent
+Inspect the machine and backend availability:
 
-Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
-
-```
-Hi have a look at program.md and let's kick off a new experiment! let's do the setup first.
+```bash
+uv run autoresearch-local inspect
 ```
 
-The `program.md` file is essentially a super lightweight "skill".
+If `llama.cpp` is missing, get install instructions:
 
-## Project structure
-
-```
-prepare.py      — constants, data prep + runtime utilities (do not modify)
-train.py        — model, optimizer, training loop (agent modifies this)
-program.md      — agent instructions
-pyproject.toml  — dependencies
+```bash
+uv run autoresearch-local setup
 ```
 
-## Design choices
+Or install it directly through the tool:
 
-- **Single file to modify.** The agent only touches `train.py`. This keeps the scope manageable and diffs reviewable.
-- **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
-- **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
+```bash
+uv run autoresearch-local setup --install-llama-cpp
+```
 
-## Platform support
+Tune a GGUF model:
 
-This code currently requires that you have a single NVIDIA GPU. In principle it is quite possible to support CPU, MPS and other platforms but this would also bloat the code. I'm not 100% sure that I want to take this on personally right now. People can reference (or have their agents reference) the full/parent nanochat repository that has wider platform support and shows the various solutions (e.g. a Flash Attention 3 kernels fallback implementation, generic device support, autodetection, etc.), feel free to create forks or discussions for other platforms and I'm happy to link to them here in the README in some new notable forks section or etc.
+```bash
+uv run autoresearch-local tune /absolute/path/to/model.gguf
+```
 
-Seeing as there seems to be a lot of interest in tinkering with autoresearch on much smaller compute platforms than an H100, a few extra words. If you're going to try running autoresearch on smaller computers (Macbooks etc.), I'd recommend one of the forks below. On top of this, here are some recommendations for how to tune the defaults for much smaller models for aspiring forks:
+Benchmark the tuned profile against a default `llama.cpp` run and, optionally, Ollama:
 
-1. To get half-decent results I'd use a dataset with a lot less entropy, e.g. this [TinyStories dataset](https://huggingface.co/datasets/karpathy/tinystories-gpt4-clean). These are GPT-4 generated short stories. Because the data is a lot narrower in scope, you will see reasonable results with a lot smaller models (if you try to sample from them after training).
-2. You might experiment with decreasing `vocab_size`, e.g. from 8192 down to 4096, 2048, 1024, or even - simply byte-level tokenizer with 256 possibly bytes after utf-8 encoding.
-3. In `prepare.py`, you'll want to lower `MAX_SEQ_LEN` a lot, depending on the computer even down to 256 etc. As you lower `MAX_SEQ_LEN`, you may want to experiment with increasing `DEVICE_BATCH_SIZE` in `train.py` slightly to compensate. The number of tokens per fwd/bwd pass is the product of these two.
-4. Also in `prepare.py`, you'll want to decrease `EVAL_TOKENS` so that your validation loss is evaluated on a lot less data.
-5. In `train.py`, the primary single knob that controls model complexity is the `DEPTH` (default 8, here). A lot of variables are just functions of this, so e.g. lower it down to e.g. 4.
-6. You'll want to most likely use `WINDOW_PATTERN` of just "L", because "SSSL" uses alternating banded attention pattern that may be very inefficient for you. Try it.
-7. You'll want to lower `TOTAL_BATCH_SIZE` a lot, but keep it powers of 2, e.g. down to `2**14` (~16K) or so even, hard to tell.
+```bash
+uv run autoresearch-local benchmark /absolute/path/to/model.gguf --include-ollama
+```
 
-I think these would be the reasonable hyperparameters to play with. Ask your favorite coding agent for help and copy paste them this guide, as well as the full source code.
+When `--include-ollama` is used, the tool imports the GGUF into Ollama once under a stable `autoresearch-local-...` model name and then reuses that model for later comparisons. The one-time import cost is intentionally kept out of the benchmark score.
 
-## Notable forks
+Launch an OpenAI-compatible `llama-server` using the saved tuned profile:
 
-- [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (MacOS)
-- [trevin-creator/autoresearch-mlx](https://github.com/trevin-creator/autoresearch-mlx) (MacOS)
-- [jsegov/autoresearch-win-rtx](https://github.com/jsegov/autoresearch-win-rtx) (Windows)
+```bash
+uv run autoresearch-local serve /absolute/path/to/model.gguf --port 8080
+```
 
-## License
+Profiles are stored under `~/.cache/autoresearch-local/profiles/`.
 
-MIT
+## Example Result
+
+Measured on March 10, 2026 on an Apple M3 Mac with 16 GB unified memory, using `llama.cpp` build `b8260-96cfc4992` and `Qwen2.5-7B-Instruct-Q4_K_M.gguf`.
+
+Command:
+
+```bash
+uv run autoresearch-local tune /absolute/path/to/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+```
+
+Observed result:
+
+| label | backend | score_ms | prompt_tps | decode_tps |
+| --- | --- | ---: | ---: | ---: |
+| default | llama.cpp | 26092.2 | 174.2 | 16.0 |
+| thr3-ctx2048-b256-ub64-ngl999-fa | llama.cpp | 19634.5 | 104.7 | 7.3 |
+
+This run produced `24.7%` lower weighted latency than the stock `llama.cpp` invocation for the fixed benchmark harness. The winning profile used:
+
+- `threads=3`
+- `ctx_size=2048`
+- `batch_size=256`
+- `ubatch_size=64`
+- `gpu_layers=999`
+- `flash_attention=on`
+
+This should be read as a machine-specific benchmark result, not a general claim that these settings are best for all Apple Silicon systems or all GGUF models.
+
+## CLI
+
+### `inspect`
+
+Prints machine information, backend availability, and discovered `.gguf` model paths from likely local model directories.
+
+```bash
+uv run autoresearch-local inspect --json
+```
+
+### `setup`
+
+Explains what local runtime pieces are missing and can install `llama.cpp` via Homebrew on macOS.
+
+```bash
+uv run autoresearch-local setup
+uv run autoresearch-local setup --install-llama-cpp
+```
+
+### `tune`
+
+Runs a fixed benchmark suite against a generated candidate set of `llama.cpp` configurations, then saves the best-performing profile.
+
+```bash
+uv run autoresearch-local tune /path/to/model.gguf --repeats 2 --max-candidates 10
+```
+
+Long-running benchmark commands show `tqdm` progress bars for scenario repeats and candidate search.
+
+What changes between candidates:
+
+- CPU threads
+- context size
+- batch size
+- micro-batch size
+- Flash Attention toggle when supported by the installed `llama.cpp`
+- GPU layer offload setting
+
+What does not change:
+
+- model file
+- benchmark prompts
+- decode length per scenario
+- sampling seed and deterministic settings
+
+### `benchmark`
+
+Runs comparison benchmarks using:
+
+- `llama.cpp` default invocation
+- saved tuned `llama.cpp` profile
+- optional Ollama model created from the same GGUF
+
+```bash
+uv run autoresearch-local benchmark /path/to/model.gguf --include-ollama --json
+```
+
+For a publishable benchmark artifact:
+
+```bash
+uv run autoresearch-local benchmark /path/to/model.gguf --export-json ./benchmark-report.json
+```
+
+### `ablate`
+
+Runs a cumulative stock-to-tuned ablation so you can explain which groups of runtime changes produced the gain.
+
+```bash
+uv run autoresearch-local ablate /path/to/model.gguf
+uv run autoresearch-local ablate /path/to/model.gguf --export-json ./ablation-report.json
+```
+
+### `shapley`
+
+Runs an exact Shapley attribution over the same grouped runtime knobs used by `ablate`. This is slower than cumulative ablation because it benchmarks every subset once, but it gives order-independent attributions that sum to the measured stock-to-tuned improvement.
+
+```bash
+uv run autoresearch-local shapley /path/to/model.gguf
+uv run autoresearch-local shapley /path/to/model.gguf --export-json ./shapley-report.json
+```
+
+### `serve`
+
+Starts `llama-server` with the saved tuned profile. If no saved profile exists, it falls back to a heuristic default profile for the current machine.
+
+```bash
+uv run autoresearch-local serve /path/to/model.gguf --host 127.0.0.1 --port 8080
+```
+
+## Benchmark Methodology
+
+The benchmark harness is fixed and measurable:
+
+- short prompt, short completion
+- medium prompt, medium completion
+- long prompt, medium completion
+- deterministic decode settings
+- repeated runs per scenario
+- weighted median latency aggregation
+
+The selected profile is the one with the lowest weighted total latency across the suite. Prompt and decode throughput are also reported for interpretability.
+
+This project does not currently measure GPU memory directly in a portable way across all supported backends. Failures due to memory pressure are surfaced as failed benchmark runs.
+
+## Local Development
+
+Run tests:
+
+```bash
+uv run python -m unittest discover -s tests -p "test_*.py"
+```
+
+## Project Layout
+
+```text
+src/autoresearch_local/
+  cli.py          command-line entrypoint
+  system.py       machine and backend detection
+  prompts.py      fixed benchmark prompt scenarios
+  profiles.py     config/result models and profile persistence
+  backends.py     llama.cpp and Ollama integrations
+  tuning.py       candidate generation, benchmarking, tuning logic
+tests/
+  test_*.py       parser, config, and storage tests
+program.md        agent loop for autonomous inference tuning work
+```
+
+## Origin
+
+This repository started as a fork of Karpathy's `autoresearch`. The original training-oriented files remain in the repo history, but the installable project in this fork is now focused on Apple Silicon local inference tuning for GGUF models.

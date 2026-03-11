@@ -1,0 +1,6 @@
+llama_model_loader: loaded meta data
+llama_print_timings:        load time =    1234.56 ms
+llama_print_timings:      sample time =      12.34 ms /    96 runs   (    0.13 ms per token,  7779.42 tokens per second)
+llama_print_timings: prompt eval time =     800.00 ms /   160 tokens (    5.00 ms per token,   200.00 tokens per second)
+llama_print_timings:        eval time =    1200.00 ms /    96 runs   (   12.50 ms per token,    80.00 tokens per second)
+llama_print_timings:       total time =    2050.00 ms
