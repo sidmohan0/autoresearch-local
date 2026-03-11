@@ -2,7 +2,24 @@
 
 `autoresearch-local` is an Apple Silicon-focused GGUF tuning and serving tool built from the structure of Karpathy's `autoresearch`.
 
-This fork does **not** claim to be a new inference engine. It is an orchestration layer around existing local runtimes:
+## How This Fork Differs From The Original
+
+Karpathy's original `autoresearch` was a CUDA-oriented autonomous training loop for improving a small-language-model training stack. This fork repurposes the same measurable, fixed-harness optimization pattern for local inference on Apple Silicon.
+
+In practical terms, this fork is:
+
+- an inference benchmarking and autotuning tool
+- focused on macOS and Apple Silicon
+- built around GGUF models and `llama.cpp`
+- designed to save and reuse tuned local serving profiles
+
+This fork is not:
+
+- the original CUDA training harness
+- a continuation of the original training objective
+- a new inference engine or kernel implementation
+
+It is an orchestration layer around existing local runtimes:
 
 - `llama.cpp` for direct GGUF loading and serving
 - `ollama` for product-level comparison against the same model
